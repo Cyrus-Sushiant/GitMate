@@ -35,6 +35,9 @@ jobs:
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
+      - name: Sync package.json version to tag
+        run: npm version "${{ steps.version.outputs.version }}" --no-git-tag-version --allow-same-version
+
       - name: Package extension (.vsix)
         run: npx --yes @vscode/vsce package -o "gitmate-${{ steps.version.outputs.version }}.vsix"
 
