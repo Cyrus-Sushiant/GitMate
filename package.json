@@ -41,7 +41,7 @@
     "commands": [
       {
         "command": "gitmate.generateCommitMessage",
-        "title": "GitMate: Generate Commit Message",
+        "title": "Generate Commit Message with GitMate",
         "icon": {
           "light": "resources/commit-light.svg",
           "dark": "resources/commit-dark.svg"
@@ -49,7 +49,7 @@
       },
       {
         "command": "gitmate.createBranch",
-        "title": "GitMate: Create Branch",
+        "title": "Create Branch with GitMate",
         "icon": {
           "light": "resources/branch-light.svg",
           "dark": "resources/branch-dark.svg"
