@@ -593,7 +593,7 @@ function renderHtml(webview: vscode.Webview): string {
         <div class="feat"><span class="dot">3</span><span><b>Chat in place.</b> Talk to your model without leaving the editor.</span></div>
         <p style="margin-top:14px">You bring your own model. GitMate works with cloud services like Anthropic, OpenAI, OpenRouter, Groq, Together, DeepSeek, Mistral, and Gemini, and it runs fully offline with local servers like Ollama and LM Studio. Your API keys live in the VS Code secret store, never in a plain settings file.</p>
         <p>Made for people who like their tools quiet, fast, and out of the way.</p>
-        <p class="small">GitMate, version 0.2.0. Built with care for the people who ship code every day.</p>
+        <p class="small">GitMate, version 1.0.1. Built with care for the people who ship code every day.</p>
       </div>
     </div>
   </section>
