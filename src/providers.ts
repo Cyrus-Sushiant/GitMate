@@ -111,12 +111,15 @@ async function oneShot(
   switch (config.kind) {
     case 'anthropic': {
       const client = anthropicClient(config);
-      const response = await client.messages.create({
-        model: config.model,
-        max_tokens: maxTokens,
-        system,
-        messages: [{ role: 'user', content: user }]
-      });
+      const response = await client.messages.create(
+        {
+          model: config.model,
+          max_tokens: maxTokens,
+          system,
+          messages: [{ role: 'user', content: user }]
+        },
+        { timeout: config.requestTimeoutMs || undefined }
+      );
       if ((response.stop_reason as string) === 'refusal') {
         throw new Error('The model declined this request.');
       }
@@ -130,6 +133,7 @@ async function oneShot(
       const res = await fetchJson(url, {
         method: 'POST',
         headers: openAiHeaders(config),
+        timeoutMs: config.requestTimeoutMs,
         body: JSON.stringify({
           model: config.model,
           max_tokens: maxTokens,
@@ -153,13 +157,15 @@ async function oneShot(
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          timeoutMs: config.requestTimeoutMs,
           body: JSON.stringify({
             model: config.model,
             stream: false,
             messages: [
               { role: 'system', content: system },
               { role: 'user', content: user }
-            ]
+            ],
+            options: ollamaOptions(config)
           })
         },
         `Could not reach Ollama at ${base}. Is "ollama serve" running?`
@@ -208,20 +214,30 @@ async function chatWithAnthropic(req: ChatRequest): Promise<void> {
 
 async function chatWithOpenAI(req: ChatRequest): Promise<void> {
   const url = joinUrl(openAiBase(req.config), 'chat/completions');
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: openAiHeaders(req.config),
-    body: JSON.stringify({
-      model: req.config.model,
-      stream: true,
-      messages: [
-        { role: 'system', content: CHAT_SYSTEM_PROMPT },
-        ...req.messages.map((m) => ({ role: m.role, content: m.content }))
-      ]
-    }),
-    signal: req.signal
-  });
+  const t = withTimeout(req.config.requestTimeoutMs, req.signal);
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: openAiHeaders(req.config),
+      body: JSON.stringify({
+        model: req.config.model,
+        stream: true,
+        messages: [
+          { role: 'system', content: CHAT_SYSTEM_PROMPT },
+          ...req.messages.map((m) => ({ role: m.role, content: m.content }))
+        ]
+      }),
+      signal: t.signal
+    });
+  } catch (err) {
+    t.done();
+    throw t.timedOut() ? timeoutError(req.config.requestTimeoutMs) : err;
+  }
+  // The reply is on its way; stop the clock so a long stream is not cut off.
+  t.clearTimer();
   if (!res.ok) {
+    t.done();
     throw new Error(`HTTP ${res.status}: ${await readError(res)}`);
   }
   await readSse(res, (data) => {
@@ -238,11 +254,13 @@ async function chatWithOpenAI(req: ChatRequest): Promise<void> {
       // Ignore keep-alive comments and partial frames.
     }
   });
+  t.done();
 }
 
 async function chatWithOllama(req: ChatRequest): Promise<void> {
   const base = req.config.baseUrl || PROVIDERS.ollama.defaults.baseUrl;
   const url = joinUrl(base, 'api/chat');
+  const t = withTimeout(req.config.requestTimeoutMs, req.signal);
   let res: Response;
   try {
     res = await fetch(url, {
@@ -254,15 +272,23 @@ async function chatWithOllama(req: ChatRequest): Promise<void> {
         messages: [
           { role: 'system', content: CHAT_SYSTEM_PROMPT },
           ...req.messages.map((m) => ({ role: m.role, content: m.content }))
-        ]
+        ],
+        options: ollamaOptions(req.config)
       }),
-      signal: req.signal
+      signal: t.signal
     });
   } catch (err) {
+    t.done();
+    if (t.timedOut()) {
+      throw timeoutError(req.config.requestTimeoutMs);
+    }
     const reason = err instanceof Error ? err.message : String(err);
     throw new Error(`Could not reach Ollama at ${base}. Is "ollama serve" running? (${reason})`);
   }
+  // First bytes are in; lift the timeout so a slow, steady stream can finish.
+  t.clearTimer();
   if (!res.ok) {
+    t.done();
     throw new Error(`HTTP ${res.status}: ${await readError(res)}`);
   }
   await readLines(res, (line) => {
@@ -276,6 +302,7 @@ async function chatWithOllama(req: ChatRequest): Promise<void> {
       // Skip non-JSON lines.
     }
   });
+  t.done();
 }
 
 // --- Connection test and model discovery ------------------------------------
@@ -284,7 +311,7 @@ async function chatWithOllama(req: ChatRequest): Promise<void> {
 export async function testConnection(config: ResolvedProviderConfig): Promise<string> {
   switch (config.kind) {
     case 'ollama': {
-      const models = await listOllamaModels(config.baseUrl);
+      const models = await listOllamaModels(config.baseUrl, config.requestTimeoutMs);
       return models.length > 0
         ? `Connected. ${models.length} model(s) available.`
         : `Connected, but no models are installed yet (try "ollama pull ${config.model || 'llama3.1'}").`;
@@ -294,7 +321,7 @@ export async function testConnection(config: ResolvedProviderConfig): Promise<st
         throw new Error('No API key set.');
       }
       const url = joinUrl(openAiBase(config), 'models');
-      await fetchJson(url, { headers: openAiHeaders(config) });
+      await fetchJson(url, { headers: openAiHeaders(config), timeoutMs: config.requestTimeoutMs });
       return 'Connected and authenticated.';
     }
     case 'anthropic': {
@@ -302,11 +329,14 @@ export async function testConnection(config: ResolvedProviderConfig): Promise<st
         throw new Error('No API key set.');
       }
       const client = anthropicClient(config);
-      await client.messages.create({
-        model: config.model,
-        max_tokens: 1,
-        messages: [{ role: 'user', content: 'ping' }]
-      });
+      await client.messages.create(
+        {
+          model: config.model,
+          max_tokens: 1,
+          messages: [{ role: 'user', content: 'ping' }]
+        },
+        { timeout: config.requestTimeoutMs || undefined }
+      );
       return 'Connected and authenticated.';
     }
     default:
@@ -318,10 +348,10 @@ export async function testConnection(config: ResolvedProviderConfig): Promise<st
 export async function listModels(config: ResolvedProviderConfig): Promise<string[]> {
   switch (config.kind) {
     case 'ollama':
-      return listOllamaModels(config.baseUrl);
+      return listOllamaModels(config.baseUrl, config.requestTimeoutMs);
     case 'openai': {
       const url = joinUrl(openAiBase(config), 'models');
-      const res = await fetchJson(url, { headers: openAiHeaders(config) });
+      const res = await fetchJson(url, { headers: openAiHeaders(config), timeoutMs: config.requestTimeoutMs });
       const data = res?.data;
       if (!Array.isArray(data)) {
         return [];
@@ -343,12 +373,12 @@ export async function listModels(config: ResolvedProviderConfig): Promise<string
 }
 
 /** Lists locally installed Ollama models via /api/tags. */
-export async function listOllamaModels(baseUrl: string): Promise<string[]> {
+export async function listOllamaModels(baseUrl: string, timeoutMs?: number): Promise<string[]> {
   const base = baseUrl || PROVIDERS.ollama.defaults.baseUrl;
   const url = joinUrl(base, 'api/tags');
   const res = await fetchJson(
     url,
-    { method: 'GET' },
+    { method: 'GET', timeoutMs },
     `Could not reach Ollama at ${base}. Is "ollama serve" running?`
   );
   const models = res?.models;
@@ -373,6 +403,13 @@ function anthropicClient(config: ResolvedProviderConfig): Anthropic {
   });
 }
 
+/** Ollama runtime options. Returns undefined when there is nothing to set. */
+function ollamaOptions(config: ResolvedProviderConfig): { num_ctx: number } | undefined {
+  return config.contextWindow && config.contextWindow > 0
+    ? { num_ctx: config.contextWindow }
+    : undefined;
+}
+
 function openAiBase(config: ResolvedProviderConfig): string {
   return config.baseUrl || PROVIDERS[config.provider].defaults.baseUrl || 'https://api.openai.com/v1';
 }
@@ -393,27 +430,105 @@ interface FetchOptions {
   method?: string;
   headers?: Record<string, string>;
   body?: string;
+  /** Abort after this many ms. 0 or undefined means no timeout. */
+  timeoutMs?: number;
+  /** A caller-owned abort signal, combined with the timeout. */
+  signal?: AbortSignal;
 }
 
-/** fetch + JSON parse with friendly error messages. */
+/** fetch + JSON parse with friendly error messages and an optional timeout. */
 async function fetchJson(url: string, options: FetchOptions, networkHint?: string): Promise<any> {
-  let response: Response;
+  const t = withTimeout(options.timeoutMs, options.signal);
   try {
-    response = await fetch(url, options);
-  } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err);
-    throw new Error(networkHint ? `${networkHint} (${reason})` : `Network error: ${reason}`);
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: options.method,
+        headers: options.headers,
+        body: options.body,
+        signal: t.signal
+      });
+    } catch (err) {
+      if (t.timedOut()) {
+        throw timeoutError(options.timeoutMs ?? 0);
+      }
+      const reason = err instanceof Error ? err.message : String(err);
+      throw new Error(networkHint ? `${networkHint} (${reason})` : `Network error: ${reason}`);
+    }
+    const text = await response.text();
+    if (!response.ok) {
+      const detail = extractErrorMessage(text) ?? text.slice(0, 300);
+      throw new Error(`HTTP ${response.status}: ${detail}`);
+    }
+    try {
+      return text ? JSON.parse(text) : {};
+    } catch {
+      throw new Error('Received a non-JSON response from the provider.');
+    }
+  } finally {
+    t.done();
   }
-  const text = await response.text();
-  if (!response.ok) {
-    const detail = extractErrorMessage(text) ?? text.slice(0, 300);
-    throw new Error(`HTTP ${response.status}: ${detail}`);
+}
+
+interface TimeoutHandle {
+  /** Pass to fetch. Undefined when there is neither a timeout nor a caller signal. */
+  signal: AbortSignal | undefined;
+  /** True once the timeout (not the caller) triggered the abort. */
+  timedOut: () => boolean;
+  /** Stop the countdown but keep forwarding caller aborts (used once a stream starts). */
+  clearTimer: () => void;
+  /** Release the timer and listeners. Safe to call more than once. */
+  done: () => void;
+}
+
+/**
+ * Builds an AbortSignal that fires when either a timeout elapses or a
+ * caller-supplied signal aborts, so requests cannot hang forever.
+ */
+function withTimeout(timeoutMs: number | undefined, userSignal?: AbortSignal): TimeoutHandle {
+  if ((!timeoutMs || timeoutMs <= 0) && !userSignal) {
+    return { signal: undefined, timedOut: () => false, clearTimer: () => {}, done: () => {} };
   }
-  try {
-    return text ? JSON.parse(text) : {};
-  } catch {
-    throw new Error('Received a non-JSON response from the provider.');
+  const controller = new AbortController();
+  let timedOut = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  if (timeoutMs && timeoutMs > 0) {
+    timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
   }
+  const forward = () => controller.abort();
+  if (userSignal) {
+    if (userSignal.aborted) {
+      controller.abort();
+    } else {
+      userSignal.addEventListener('abort', forward, { once: true });
+    }
+  }
+  const clearTimer = () => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+  };
+  return {
+    signal: controller.signal,
+    timedOut: () => timedOut,
+    clearTimer,
+    done: () => {
+      clearTimer();
+      userSignal?.removeEventListener('abort', forward);
+    }
+  };
+}
+
+function timeoutError(timeoutMs: number): Error {
+  const seconds = Math.max(1, Math.round(timeoutMs / 1000));
+  return new Error(
+    `The request timed out after ${seconds}s. Increase "gitmate.requestTimeoutMs" in settings, ` +
+      'or check that your model server is responding.'
+  );
 }
 
 async function readError(res: Response): Promise<string> {
