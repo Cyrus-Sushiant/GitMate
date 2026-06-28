@@ -1,5 +1,9 @@
 # GitMate
 
+[![Visual Studio Marketplace](https://img.shields.io/visual-studio-marketplace/v/SmartClouds.gitmate?label=VS%20Code%20Marketplace)](https://marketplace.visualstudio.com/items?itemName=SmartClouds.gitmate)
+
+**[Get GitMate on the VS Code Marketplace »](https://marketplace.visualstudio.com/items?itemName=SmartClouds.gitmate)**
+
 GitMate is a git sidekick for VS Code. It puts a chat with your model right in the sidebar, writes commit messages from your diff, and creates branches through a quick dialog. Bring your own model, cloud or local.
 
 ## What you get
