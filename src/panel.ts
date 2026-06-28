@@ -5,6 +5,7 @@ import {
   ProviderId,
   getActiveProvider,
   getProviderSettings,
+  getRequestTimeoutMs,
   hasApiKey,
   resolveActiveConfig,
   setActiveProvider,
@@ -13,10 +14,17 @@ import {
 } from './config';
 import { ChatTurn, listModels, streamChat, testConnection } from './providers';
 
+interface ProviderFormValues {
+  model: string;
+  baseUrl: string;
+  requestTimeoutMs?: number;
+  contextWindow?: number;
+}
+
 interface SaveMessage {
   type: 'save';
   activeProvider: ProviderId;
-  providers: Record<ProviderId, { model: string; baseUrl: string }>;
+  providers: Record<ProviderId, ProviderFormValues>;
   keys: Partial<Record<ProviderId, string>>;
 }
 
@@ -26,6 +34,8 @@ interface TestMessage {
   model: string;
   baseUrl: string;
   key?: string;
+  requestTimeoutMs?: number;
+  contextWindow?: number;
 }
 
 interface FetchModelsMessage {
@@ -34,6 +44,8 @@ interface FetchModelsMessage {
   model: string;
   baseUrl: string;
   key?: string;
+  requestTimeoutMs?: number;
+  contextWindow?: number;
 }
 
 interface ChatMessage {
@@ -130,6 +142,9 @@ export class GitMateViewProvider implements vscode.WebviewViewProvider {
         defaults: meta.defaults,
         model: settings.model,
         baseUrl: settings.baseUrl,
+        requestTimeoutMs: settings.requestTimeoutMs,
+        contextWindow: settings.contextWindow,
+        defaultTimeoutMs: getRequestTimeoutMs(),
         hasKey: meta.needsKey ? await hasApiKey(this.context, id) : false
       };
     }
@@ -141,7 +156,12 @@ export class GitMateViewProvider implements vscode.WebviewViewProvider {
       for (const id of PROVIDER_IDS) {
         const incoming = message.providers[id];
         if (incoming) {
-          await setProviderSettings(id, { model: incoming.model, baseUrl: incoming.baseUrl });
+          await setProviderSettings(id, {
+            model: incoming.model,
+            baseUrl: incoming.baseUrl,
+            requestTimeoutMs: incoming.requestTimeoutMs,
+            contextWindow: incoming.contextWindow
+          });
         }
         const key = message.keys[id];
         if (key !== undefined) {
@@ -164,7 +184,9 @@ export class GitMateViewProvider implements vscode.WebviewViewProvider {
         kind: PROVIDERS[message.provider].kind,
         model: message.model,
         baseUrl: message.baseUrl,
-        apiKey: message.key
+        apiKey: message.key,
+        requestTimeoutMs: message.requestTimeoutMs ?? getRequestTimeoutMs(),
+        contextWindow: message.contextWindow
       });
       this.post({ type: 'testResult', ok: true, message: detail });
     } catch (err) {
@@ -179,7 +201,9 @@ export class GitMateViewProvider implements vscode.WebviewViewProvider {
         kind: PROVIDERS[message.provider].kind,
         model: message.model,
         baseUrl: message.baseUrl,
-        apiKey: message.key
+        apiKey: message.key,
+        requestTimeoutMs: message.requestTimeoutMs ?? getRequestTimeoutMs(),
+        contextWindow: message.contextWindow
       });
       this.post({ type: 'models', models });
     } catch (err) {
@@ -243,18 +267,15 @@ export class GitMateViewProvider implements vscode.WebviewViewProvider {
         prompt: 'Type the exact model id this provider expects'
       });
       if (value && value.trim()) {
-        await setProviderSettings(active, {
-          model: value.trim(),
-          baseUrl: getProviderSettings(active).baseUrl
-        });
+        await setProviderSettings(active, { ...getProviderSettings(active), model: value.trim() });
         await this.sendState();
       }
       return;
     }
     if (picked.providerId && picked.model) {
       await setProviderSettings(picked.providerId, {
-        model: picked.model,
-        baseUrl: getProviderSettings(picked.providerId).baseUrl
+        ...getProviderSettings(picked.providerId),
+        model: picked.model
       });
       await setActiveProvider(picked.providerId);
       await this.sendState();
@@ -536,6 +557,18 @@ function renderHtml(webview: vscode.Webview): string {
           <div class="field-note" id="baseUrlNote"></div>
         </div>
 
+        <div id="ctxRow">
+          <label for="contextWindow">Context window (num_ctx)</label>
+          <input id="contextWindow" type="number" min="0" step="1024" placeholder="Model default" />
+          <div class="field-note">Tokens of context sent to Ollama. Leave blank to use the model default. Try 8192 for long diffs.</div>
+        </div>
+
+        <div id="timeoutRow">
+          <label for="timeoutMs">Request timeout (ms)</label>
+          <input id="timeoutMs" type="number" min="0" step="1000" placeholder="Default" />
+          <div class="field-note" id="timeoutNote"></div>
+        </div>
+
         <div id="keyRow">
           <label for="apiKey">API key</label>
           <input id="apiKey" type="password" />
@@ -686,16 +719,25 @@ function renderHtml(webview: vscode.Webview): string {
     const baseUrlRow = el('baseUrlRow');
     const baseUrlEl = el('baseUrl');
     const baseUrlNote = el('baseUrlNote');
+    const ctxRow = el('ctxRow');
+    const ctxEl = el('contextWindow');
+    const timeoutEl = el('timeoutMs');
+    const timeoutNote = el('timeoutNote');
     const keyRow = el('keyRow');
     const keyEl = el('apiKey');
     const keyNote = el('keyNote');
     const statusEl = el('status');
 
+    function parsePositive(v) { const n = parseInt(v, 10); return Number.isFinite(n) && n > 0 ? n : undefined; }
     function current() { return state.providers[providerEl.value]; }
     function applyProvider() {
       const p = current();
       modelEl.value = p.model;
       baseUrlEl.value = p.baseUrl;
+      ctxEl.value = p.contextWindow != null ? p.contextWindow : '';
+      timeoutEl.value = p.requestTimeoutMs != null ? p.requestTimeoutMs : '';
+      timeoutNote.textContent = 'How long to wait before giving up. Leave blank for the default (' + (p.defaultTimeoutMs ? p.defaultTimeoutMs + ' ms' : 'no limit') + '). Streaming replies are not cut off.';
+      ctxRow.classList.toggle('hidden', p.kind !== 'ollama');
       kindPill.textContent = p.local ? 'local' : 'cloud';
       kindPill.className = 'pill ' + (p.local ? 'local' : 'cloud');
       baseUrlRow.classList.toggle('hidden', !p.usesBaseUrl);
@@ -712,14 +754,17 @@ function renderHtml(webview: vscode.Webview): string {
       const p = current();
       p.model = modelEl.value.trim();
       p.baseUrl = baseUrlEl.value.trim();
+      p.contextWindow = parsePositive(ctxEl.value);
+      p.requestTimeoutMs = parsePositive(timeoutEl.value);
     }
     function collectSave() {
       const providers = {};
       for (const id of Object.keys(state.providers)) {
-        providers[id] = { model: state.providers[id].model, baseUrl: state.providers[id].baseUrl };
+        const s = state.providers[id];
+        providers[id] = { model: s.model, baseUrl: s.baseUrl, requestTimeoutMs: s.requestTimeoutMs, contextWindow: s.contextWindow };
       }
       const active = providerEl.value;
-      providers[active] = { model: modelEl.value.trim(), baseUrl: baseUrlEl.value.trim() };
+      providers[active] = { model: modelEl.value.trim(), baseUrl: baseUrlEl.value.trim(), requestTimeoutMs: parsePositive(timeoutEl.value), contextWindow: parsePositive(ctxEl.value) };
       const keys = {};
       if (current().needsKey && keyEl.value.length > 0) keys[active] = keyEl.value;
       return { type: 'save', activeProvider: active, providers, keys };
@@ -727,15 +772,17 @@ function renderHtml(webview: vscode.Webview): string {
     providerEl.addEventListener('change', applyProvider);
     modelEl.addEventListener('input', syncLocal);
     baseUrlEl.addEventListener('input', syncLocal);
+    ctxEl.addEventListener('input', syncLocal);
+    timeoutEl.addEventListener('input', syncLocal);
     el('save').addEventListener('click', () => { syncLocal(); vscode.postMessage(collectSave()); });
     el('test').addEventListener('click', () => {
       syncLocal();
       statusEl.textContent = 'Testing...'; statusEl.className = 'status';
-      vscode.postMessage({ type: 'test', provider: providerEl.value, model: modelEl.value.trim(), baseUrl: baseUrlEl.value.trim(), key: keyEl.value.length > 0 ? keyEl.value : undefined });
+      vscode.postMessage({ type: 'test', provider: providerEl.value, model: modelEl.value.trim(), baseUrl: baseUrlEl.value.trim(), key: keyEl.value.length > 0 ? keyEl.value : undefined, requestTimeoutMs: parsePositive(timeoutEl.value), contextWindow: parsePositive(ctxEl.value) });
     });
     fetchBtn.addEventListener('click', () => {
       modelNoteEl.textContent = 'Loading models...';
-      vscode.postMessage({ type: 'fetchModels', provider: providerEl.value, model: modelEl.value.trim(), baseUrl: baseUrlEl.value.trim(), key: keyEl.value.length > 0 ? keyEl.value : undefined });
+      vscode.postMessage({ type: 'fetchModels', provider: providerEl.value, model: modelEl.value.trim(), baseUrl: baseUrlEl.value.trim(), key: keyEl.value.length > 0 ? keyEl.value : undefined, requestTimeoutMs: parsePositive(timeoutEl.value), contextWindow: parsePositive(ctxEl.value) });
     });
     modelListEl.addEventListener('change', () => { if (modelListEl.value) { modelEl.value = modelListEl.value; syncLocal(); } });
 

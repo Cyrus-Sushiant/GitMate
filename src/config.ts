@@ -37,6 +37,10 @@ export const PROVIDER_IDS: ProviderId[] = [
 export interface PerProviderSettings {
   model: string;
   baseUrl: string;
+  /** Per-provider request timeout in ms. Undefined falls back to the global default. */
+  requestTimeoutMs?: number;
+  /** Ollama context window (num_ctx). Undefined leaves the model default. */
+  contextWindow?: number;
 }
 
 export interface ResolvedProviderConfig {
@@ -45,6 +49,10 @@ export interface ResolvedProviderConfig {
   model: string;
   baseUrl: string;
   apiKey?: string;
+  /** How long to wait for a request before aborting, in ms. 0 means no limit. */
+  requestTimeoutMs: number;
+  /** Ollama context window (num_ctx). 0/undefined leaves the model default. */
+  contextWindow?: number;
 }
 
 export interface ProviderMeta {
@@ -215,13 +223,26 @@ export function getActiveProvider(): ProviderId {
   return PROVIDER_IDS.includes(value as ProviderId) ? (value as ProviderId) : 'anthropic';
 }
 
+/** Global request timeout in ms, the fallback when a provider has no override. */
+export function getRequestTimeoutMs(): number {
+  const value = gitmateConfig().get<number>('requestTimeoutMs', 60000);
+  return typeof value === 'number' && value > 0 ? Math.floor(value) : 0;
+}
+
+/** Coerces a stored value to a positive integer, or undefined when unset/invalid. */
+function positiveOrUndefined(value: unknown): number | undefined {
+  return typeof value === 'number' && value > 0 ? Math.floor(value) : undefined;
+}
+
 export function getProviderSettings(provider: ProviderId): PerProviderSettings {
   const all = gitmateConfig().get<Record<string, Partial<PerProviderSettings>>>('providers', {});
   const defaults = PROVIDERS[provider].defaults;
   const stored = all[provider] ?? {};
   return {
     model: (stored.model ?? '').trim() || defaults.model,
-    baseUrl: (stored.baseUrl ?? defaults.baseUrl).trim() || defaults.baseUrl
+    baseUrl: (stored.baseUrl ?? defaults.baseUrl).trim() || defaults.baseUrl,
+    requestTimeoutMs: positiveOrUndefined(stored.requestTimeoutMs),
+    contextWindow: positiveOrUndefined(stored.contextWindow)
   };
 }
 
@@ -247,7 +268,15 @@ export async function resolveActiveConfig(
   const meta = PROVIDERS[provider];
   const settings = getProviderSettings(provider);
   const apiKey = meta.needsKey ? await getApiKey(context, provider) : undefined;
-  return { provider, kind: meta.kind, model: settings.model, baseUrl: settings.baseUrl, apiKey };
+  return {
+    provider,
+    kind: meta.kind,
+    model: settings.model,
+    baseUrl: settings.baseUrl,
+    apiKey,
+    requestTimeoutMs: settings.requestTimeoutMs ?? getRequestTimeoutMs(),
+    contextWindow: meta.kind === 'ollama' ? settings.contextWindow : undefined
+  };
 }
 
 export async function setActiveProvider(provider: ProviderId): Promise<void> {
@@ -260,7 +289,14 @@ export async function setProviderSettings(
 ): Promise<void> {
   const config = gitmateConfig();
   const all = { ...(config.get<Record<string, PerProviderSettings>>('providers', {})) };
-  all[provider] = { model: settings.model.trim(), baseUrl: settings.baseUrl.trim() };
+  const entry: PerProviderSettings = { model: settings.model.trim(), baseUrl: settings.baseUrl.trim() };
+  if (settings.requestTimeoutMs && settings.requestTimeoutMs > 0) {
+    entry.requestTimeoutMs = Math.floor(settings.requestTimeoutMs);
+  }
+  if (settings.contextWindow && settings.contextWindow > 0) {
+    entry.contextWindow = Math.floor(settings.contextWindow);
+  }
+  all[provider] = entry;
   await config.update('providers', all, vscode.ConfigurationTarget.Global);
 }
 

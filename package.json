@@ -163,6 +163,11 @@
           "type": "number",
           "default": 100000,
           "description": "Maximum size of the diff (in bytes) sent to the model. Larger diffs are truncated with a warning."
+        },
+        "gitmate.requestTimeoutMs": {
+          "type": "number",
+          "default": 60000,
+          "markdownDescription": "Default time to wait (in milliseconds) for a model request before giving up. Helpful when a local model is slow to load or stops responding. Set to `0` to wait indefinitely. While a chat reply is streaming this acts as a connection timeout, so long answers are not cut off. Each provider can override this from the GitMate settings panel."
         }
       }
     }
