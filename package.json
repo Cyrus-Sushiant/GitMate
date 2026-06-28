@@ -2,8 +2,8 @@
   "name": "gitmate",
   "displayName": "GitMate",
   "description": "A git sidekick for VS Code: chat with your model in the sidebar, generate commit messages, and create branches. Works with Anthropic, OpenAI, OpenRouter, Groq, Ollama, LM Studio, and more.",
-  "version": "0.2.0",
-  "publisher": "gitmate",
+  "version": "1.0.0",
+  "publisher": "SmartClouds",
   "engines": {
     "vscode": "^1.85.0"
   },
