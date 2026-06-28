@@ -1,0 +1,183 @@
+{
+  "name": "gitmate",
+  "displayName": "GitMate",
+  "description": "A git sidekick for VS Code: chat with your model in the sidebar, generate commit messages, and create branches. Works with Anthropic, OpenAI, OpenRouter, Groq, Ollama, LM Studio, and more.",
+  "version": "0.2.0",
+  "publisher": "gitmate",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "SCM Providers",
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "extensionDependencies": [
+    "vscode.git"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "gitmate",
+          "title": "GitMate",
+          "icon": "resources/gitmate.svg"
+        }
+      ]
+    },
+    "views": {
+      "gitmate": [
+        {
+          "id": "gitmate.chatView",
+          "name": "GitMate",
+          "type": "webview"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "gitmate.generateCommitMessage",
+        "title": "GitMate: Generate Commit Message",
+        "icon": {
+          "light": "resources/commit-light.svg",
+          "dark": "resources/commit-dark.svg"
+        }
+      },
+      {
+        "command": "gitmate.createBranch",
+        "title": "GitMate: Create Branch",
+        "icon": {
+          "light": "resources/branch-light.svg",
+          "dark": "resources/branch-dark.svg"
+        }
+      },
+      {
+        "command": "gitmate.openChat",
+        "title": "GitMate: Open Chat"
+      },
+      {
+        "command": "gitmate.newChat",
+        "title": "GitMate: New Chat",
+        "icon": "$(add)"
+      },
+      {
+        "command": "gitmate.openSettings",
+        "title": "GitMate: Open Settings",
+        "icon": "$(gear)"
+      }
+    ],
+    "menus": {
+      "scm/title": [
+        {
+          "command": "gitmate.generateCommitMessage",
+          "group": "navigation",
+          "when": "scmProvider == git"
+        },
+        {
+          "command": "gitmate.createBranch",
+          "group": "navigation",
+          "when": "scmProvider == git"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "gitmate.newChat",
+          "group": "navigation",
+          "when": "view == gitmate.chatView"
+        },
+        {
+          "command": "gitmate.openSettings",
+          "group": "navigation",
+          "when": "view == gitmate.chatView"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "gitmate.generateCommitMessage",
+          "when": "scmProvider == git || gitOpenRepositoryCount != 0"
+        },
+        {
+          "command": "gitmate.createBranch",
+          "when": "gitOpenRepositoryCount != 0"
+        },
+        {
+          "command": "gitmate.openChat"
+        },
+        {
+          "command": "gitmate.newChat"
+        },
+        {
+          "command": "gitmate.openSettings"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "GitMate",
+      "properties": {
+        "gitmate.activeProvider": {
+          "type": "string",
+          "enum": [
+            "anthropic",
+            "openai",
+            "openrouter",
+            "groq",
+            "together",
+            "deepseek",
+            "mistral",
+            "gemini",
+            "lmstudio",
+            "ollama",
+            "custom"
+          ],
+          "enumDescriptions": [
+            "Anthropic Claude (cloud)",
+            "OpenAI (cloud)",
+            "OpenRouter (cloud)",
+            "Groq (cloud)",
+            "Together AI (cloud)",
+            "DeepSeek (cloud)",
+            "Mistral (cloud)",
+            "Google Gemini (cloud)",
+            "LM Studio (local)",
+            "Ollama (local)",
+            "Custom OpenAI-compatible"
+          ],
+          "default": "anthropic",
+          "markdownDescription": "Active LLM provider. Pick a provider and set its model, base URL, and key visually in the GitMate sidebar (**GitMate: Open Settings**)."
+        },
+        "gitmate.providers": {
+          "type": "object",
+          "default": {},
+          "markdownDescription": "Per-provider model and base URL. Blank entries fall back to sensible defaults. API keys are stored securely in SecretStorage, not here. Managed in the GitMate sidebar."
+        },
+        "gitmate.commitMessageInstructions": {
+          "type": "string",
+          "editPresentation": "multilineText",
+          "default": "",
+          "description": "Optional extra guidance added on top of GitMate's built-in commit prompt, which already follows Conventional Commits. Use this for house rules, like a required scope or a ticket reference."
+        },
+        "gitmate.maxDiffBytes": {
+          "type": "number",
+          "default": 100000,
+          "description": "Maximum size of the diff (in bytes) sent to the model. Larger diffs are truncated with a warning."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.4.0"
+  }
+}
