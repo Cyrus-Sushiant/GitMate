@@ -373,25 +373,38 @@ function renderHtml(webview: vscode.Webview): string {
     }
     .chip:hover { background: var(--vscode-toolbar-hoverBackground); border-color: var(--vscode-focusBorder); }
 
-    .msg { display: flex; gap: 9px; align-items: flex-start; }
+    .msg { display: flex; gap: 9px; align-items: flex-start; max-width: 100%; }
+    /* Assistant on the left, you on the right (standard chat layout). */
+    .msg.user { flex-direction: row-reverse; }
     .avatar { width: 22px; height: 22px; border-radius: 6px; flex: 0 0 auto; display: flex; align-items: center; justify-content: center; font-size: 0.66em; font-weight: 700; }
     .avatar.you { background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
     .avatar.bot { background: linear-gradient(135deg, #6e8bff, #9b6bff); color: #fff; }
     .col { flex: 1 1 auto; min-width: 0; }
+    .msg.user .col { text-align: right; }
     .who { font-size: 0.72em; text-transform: uppercase; letter-spacing: 0.4px; color: var(--vscode-descriptionForeground); margin-bottom: 3px; }
     .bubble {
+      display: inline-block; text-align: left; max-width: 100%;
       background: var(--vscode-editorWidget-background, rgba(127,127,127,0.08));
       border: 1px solid var(--vscode-editorWidget-border, transparent);
-      border-radius: 8px; padding: 8px 11px; line-height: 1.5; overflow-wrap: anywhere;
+      border-radius: 10px 10px 10px 4px; padding: 8px 11px; line-height: 1.5; overflow-wrap: anywhere;
     }
-    .msg.user .bubble { background: var(--vscode-textBlockQuote-background); border-color: var(--vscode-textBlockQuote-border, transparent); }
-    .bubble.error { border-color: var(--vscode-inputValidation-errorBorder, var(--vscode-errorForeground)); color: var(--vscode-errorForeground); }
+    .msg.user .bubble {
+      background: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+      border-color: transparent;
+      border-radius: 10px 10px 4px 10px;
+    }
+    .bubble.error { background: var(--vscode-inputValidation-errorBackground, transparent); border-color: var(--vscode-inputValidation-errorBorder, var(--vscode-errorForeground)); color: var(--vscode-errorForeground); }
     .bubble p { margin: 0 0 8px; } .bubble p:last-child { margin-bottom: 0; }
     .bubble pre { background: var(--vscode-textCodeBlock-background, rgba(127,127,127,0.12)); padding: 9px 11px; border-radius: 6px; overflow-x: auto; font-family: var(--vscode-editor-font-family, monospace); font-size: 0.92em; }
     .bubble code { font-family: var(--vscode-editor-font-family, monospace); font-size: 0.92em; }
     .bubble :not(pre) > code { background: var(--vscode-textCodeBlock-background, rgba(127,127,127,0.16)); padding: 1px 5px; border-radius: 4px; }
-    .cursor::after { content: '▍'; opacity: 0.6; animation: blink 1s steps(2) infinite; }
-    @keyframes blink { 0%,100% { opacity: 0.15; } 50% { opacity: 0.7; } }
+    /* Typing indicator: three soft bouncing dots while we wait for the reply. */
+    .typing { display: inline-flex; align-items: center; gap: 5px; padding: 3px 1px; }
+    .typing span { width: 6px; height: 6px; border-radius: 50%; background: var(--vscode-descriptionForeground); opacity: 0.5; animation: bounce 1.3s infinite ease-in-out both; }
+    .typing span:nth-child(2) { animation-delay: 0.18s; }
+    .typing span:nth-child(3) { animation-delay: 0.36s; }
+    @keyframes bounce { 0%, 70%, 100% { transform: translateY(0); opacity: 0.4; } 35% { transform: translateY(-5px); opacity: 0.9; } }
 
     /* ---- Composer (Copilot style) ---- */
     .composer { padding: 8px 10px 12px; }
@@ -625,6 +638,7 @@ function renderHtml(webview: vscode.Webview): string {
     let streaming = false;
     let liveBubble = null;
     let liveText = '';
+    const TYPING_HTML = '<div class="typing"><span></span><span></span><span></span></div>';
 
     function escapeHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
     function renderMarkdown(text) {
@@ -680,7 +694,7 @@ function renderHtml(webview: vscode.Webview): string {
       chatInput.value = ''; autoGrow(); updateSendEnabled();
       liveText = '';
       liveBubble = addMessage('assistant', '');
-      liveBubble.classList.add('cursor');
+      liveBubble.innerHTML = TYPING_HTML;
       setStreaming(true);
       vscode.postMessage({ type: 'chat', messages: history });
     }
@@ -823,8 +837,13 @@ function renderHtml(webview: vscode.Webview): string {
           break;
         }
         case 'chatDone': {
-          if (liveBubble) liveBubble.classList.remove('cursor');
-          if (liveText.trim().length > 0) history.push({ role: 'assistant', content: liveText });
+          if (liveText.trim().length > 0) {
+            history.push({ role: 'assistant', content: liveText });
+          } else if (liveBubble) {
+            // No content arrived: drop the empty placeholder so the dots don't linger.
+            const msgEl = liveBubble.closest('.msg');
+            if (msgEl) msgEl.remove();
+          }
           liveBubble = null; setStreaming(false); chatInput.focus();
           break;
         }
