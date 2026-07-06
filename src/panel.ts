@@ -479,6 +479,14 @@ function renderHtml(webview: vscode.Webview): string {
     input, select { width: 100%; padding: 7px 9px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, transparent); border-radius: 6px; font-family: inherit; font-size: inherit; }
     input:focus, select:focus { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
     .row { display: flex; gap: 8px; align-items: center; }
+    .dropdown { border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 6px; background: var(--vscode-input-background); overflow: hidden; }
+    .dropdown input { border: none; border-bottom: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 0; }
+    .dropdown input:focus { outline: none; border-bottom-color: var(--vscode-focusBorder); }
+    .dropdown-list { max-height: 180px; overflow-y: auto; }
+    .dropdown-item { padding: 6px 10px; cursor: pointer; font-size: 0.92em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .dropdown-item:hover, .dropdown-item.active { background: var(--vscode-list-hoverBackground, rgba(127,127,127,0.12)); }
+    .dropdown-item.selected { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
+    .dropdown-empty { padding: 8px 10px; color: var(--vscode-descriptionForeground); font-size: 0.88em; }
     .field-note { color: var(--vscode-descriptionForeground); font-size: 0.85em; margin-top: 5px; }
     .hidden { display: none !important; }
     button.btn { padding: 7px 14px; border: none; border-radius: 6px; cursor: pointer; font-family: inherit; font-size: inherit; white-space: nowrap; }
@@ -572,7 +580,10 @@ function renderHtml(webview: vscode.Webview): string {
             <input id="model" type="text" />
             <button class="btn secondary" id="fetchModels">Fetch models</button>
           </div>
-          <select id="modelList" class="hidden" style="margin-top:8px"></select>
+          <div id="modelDropdown" class="dropdown hidden" style="margin-top:8px">
+            <input id="modelSearch" type="text" placeholder="Search models..." />
+            <div id="modelOptions" class="dropdown-list"></div>
+          </div>
           <div class="field-note" id="modelNote"></div>
         </div>
 
@@ -750,7 +761,9 @@ function renderHtml(webview: vscode.Webview): string {
     const providerEl = el('provider');
     const kindPill = el('kindPill');
     const modelEl = el('model');
-    const modelListEl = el('modelList');
+    const modelDropdown = el('modelDropdown');
+    const modelSearch = el('modelSearch');
+    const modelOptions = el('modelOptions');
     const modelNoteEl = el('modelNote');
     const fetchBtn = el('fetchModels');
     const baseUrlRow = el('baseUrlRow');
@@ -785,7 +798,7 @@ function renderHtml(webview: vscode.Webview): string {
       keyEl.placeholder = p.hasKey ? 'Saved. Leave blank to keep it.' : 'Paste your API key';
       keyNote.textContent = p.needsKey ? 'Stored in the VS Code secret store, not in settings.json.' : '';
       modelNoteEl.textContent = p.modelHint || '';
-      modelListEl.classList.add('hidden');
+      hideModelDropdown();
       baseUrlNote.textContent = p.local ? 'The address of your local server.' : 'Leave blank to use the provider default.';
       statusEl.textContent = ''; statusEl.className = 'status';
     }
@@ -823,7 +836,64 @@ function renderHtml(webview: vscode.Webview): string {
       modelNoteEl.textContent = 'Loading models...';
       vscode.postMessage({ type: 'fetchModels', provider: providerEl.value, model: modelEl.value.trim(), baseUrl: baseUrlEl.value.trim(), key: keyEl.value.length > 0 ? keyEl.value : undefined, requestTimeoutMs: parsePositive(timeoutEl.value), contextWindow: parsePositive(ctxEl.value) });
     });
-    modelListEl.addEventListener('change', () => { if (modelListEl.value) { modelEl.value = modelListEl.value; syncLocal(); } });
+    /* ---- Searchable model dropdown ---- */
+    let fetchedModels = [];
+    let filteredModels = [];
+    let activeModelIndex = -1;
+
+    function hideModelDropdown() {
+      modelDropdown.classList.add('hidden');
+      fetchedModels = []; filteredModels = []; activeModelIndex = -1;
+      modelSearch.value = '';
+    }
+    function filterModels() {
+      const q = modelSearch.value.trim().toLowerCase();
+      filteredModels = q ? fetchedModels.filter(m => m.toLowerCase().includes(q)) : fetchedModels.slice();
+      activeModelIndex = -1;
+      renderModelOptions();
+    }
+    function renderModelOptions() {
+      modelOptions.innerHTML = '';
+      if (!filteredModels.length) {
+        const d = document.createElement('div');
+        d.className = 'dropdown-empty';
+        d.textContent = 'No models match your search.';
+        modelOptions.appendChild(d);
+        return;
+      }
+      const currentModel = modelEl.value.trim();
+      filteredModels.forEach((name, i) => {
+        const item = document.createElement('div');
+        item.className = 'dropdown-item' + (name === currentModel ? ' selected' : '') + (i === activeModelIndex ? ' active' : '');
+        item.textContent = name;
+        item.title = name;
+        item.addEventListener('click', () => chooseModel(name));
+        modelOptions.appendChild(item);
+      });
+    }
+    function chooseModel(name) {
+      modelEl.value = name;
+      syncLocal();
+      renderModelOptions();
+    }
+    modelSearch.addEventListener('input', filterModels);
+    modelSearch.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (!filteredModels.length) return;
+        const step = e.key === 'ArrowDown' ? 1 : -1;
+        activeModelIndex = (activeModelIndex + step + filteredModels.length) % filteredModels.length;
+        renderModelOptions();
+        const active = modelOptions.querySelector('.dropdown-item.active');
+        if (active) active.scrollIntoView({ block: 'nearest' });
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        if (activeModelIndex >= 0) chooseModel(filteredModels[activeModelIndex]);
+        else if (filteredModels.length === 1) chooseModel(filteredModels[0]);
+      } else if (e.key === 'Escape') {
+        hideModelDropdown();
+      }
+    });
 
     /* ---- Incoming ---- */
     window.addEventListener('message', (event) => {
@@ -850,11 +920,13 @@ function renderHtml(webview: vscode.Webview): string {
         case 'testResult': statusEl.textContent = msg.message; statusEl.className = 'status ' + (msg.ok ? 'ok' : 'err'); break;
         case 'error': statusEl.textContent = msg.message; statusEl.className = 'status err'; break;
         case 'models': {
-          if (!msg.models.length) { modelNoteEl.textContent = 'No models found from this endpoint.'; break; }
-          modelListEl.innerHTML = '<option value="">Choose a model...</option>';
-          for (const name of msg.models) { const o = document.createElement('option'); o.value = name; o.textContent = name; modelListEl.appendChild(o); }
-          modelListEl.classList.remove('hidden');
-          modelNoteEl.textContent = msg.models.length + ' model(s) available.';
+          if (!msg.models.length) { modelNoteEl.textContent = 'No models found from this endpoint.'; hideModelDropdown(); break; }
+          fetchedModels = msg.models.slice();
+          modelSearch.value = '';
+          filterModels();
+          modelDropdown.classList.remove('hidden');
+          modelNoteEl.textContent = msg.models.length + ' model(s) available. Type to filter, click one to use it.';
+          modelSearch.focus();
           break;
         }
         case 'modelsError': modelNoteEl.textContent = msg.message; break;
