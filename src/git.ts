@@ -153,3 +153,111 @@ export async function collectDiff(repo: Repository): Promise<string> {
   }
   return repo.diff(false);
 }
+
+export interface CondensedDiff {
+  text: string;
+  /** Number of files whose patch body was replaced with a summary. */
+  summarizedFiles: number;
+}
+
+/**
+ * Shrinks a diff to fit within `maxBytes` without losing track of which files
+ * changed. The diff is split into per-file patches; whole patches are kept
+ * while they fit (smallest first, so one huge lockfile or bundle does not
+ * crowd out the real code), and each remaining file is reduced to its header
+ * plus a count of added and removed lines.
+ */
+export function condenseDiff(diff: string, maxBytes: number): CondensedDiff {
+  if (byteLength(diff) <= maxBytes) {
+    return { text: diff, summarizedFiles: 0 };
+  }
+
+  const files = splitDiffByFile(diff);
+  const full = files.map((lines) => lines.join('\n'));
+  const stubs = files.map((lines) => summarizeFilePatch(lines).join('\n'));
+
+  // Start from the all-stubs form and upgrade files back to their full patch,
+  // smallest first, while the budget allows.
+  const separators = files.length - 1;
+  let size = stubs.reduce((sum, stub) => sum + byteLength(stub), 0) + separators;
+  if (size > maxBytes) {
+    // Even one line per file does not fit; keep whatever whole lines do.
+    return { text: truncateAtLine(diff, maxBytes), summarizedFiles: 0 };
+  }
+
+  const keepFull = new Array<boolean>(files.length).fill(false);
+  const bySize = full
+    .map((text, index) => ({ index, bytes: byteLength(text) }))
+    .sort((a, b) => a.bytes - b.bytes);
+  for (const { index, bytes } of bySize) {
+    const grown = size - byteLength(stubs[index]) + bytes;
+    if (grown > maxBytes) {
+      break;
+    }
+    keepFull[index] = true;
+    size = grown;
+  }
+
+  const summarizedFiles = keepFull.filter((kept) => !kept).length;
+  if (summarizedFiles === 0) {
+    return { text: diff, summarizedFiles: 0 };
+  }
+  const text = files.map((_, i) => (keepFull[i] ? full[i] : stubs[i])).join('\n');
+  return { text, summarizedFiles };
+}
+
+function byteLength(text: string): number {
+  return Buffer.byteLength(text, 'utf8');
+}
+
+/** Splits unified diff output into one group of lines per file. */
+function splitDiffByFile(diff: string): string[][] {
+  const files: string[][] = [];
+  let current: string[] = [];
+  for (const line of diff.split('\n')) {
+    if (line.startsWith('diff --git ') && current.length > 0) {
+      files.push(current);
+      current = [];
+    }
+    current.push(line);
+  }
+  if (current.length > 0) {
+    files.push(current);
+  }
+  return files;
+}
+
+/** Reduces one file's patch to its header plus added/removed line counts. */
+function summarizeFilePatch(lines: string[]): string[] {
+  const firstHunk = lines.findIndex((line) => line.startsWith('@@'));
+  if (firstHunk === -1) {
+    // No hunks (binary file, rename, mode change): already just a header.
+    return lines;
+  }
+  let added = 0;
+  let removed = 0;
+  for (const line of lines) {
+    if (line.startsWith('+') && !line.startsWith('+++')) {
+      added++;
+    } else if (line.startsWith('-') && !line.startsWith('---')) {
+      removed++;
+    }
+  }
+  return [
+    ...lines.slice(0, firstHunk),
+    `[patch body omitted to fit the size limit: ${added} lines added, ${removed} lines removed]`
+  ];
+}
+
+/** Cuts a diff at a whole-line boundary so it fits within `maxBytes`. */
+function truncateAtLine(diff: string, maxBytes: number): string {
+  const note = '\n[remaining diff omitted to fit the size limit]';
+  const budget = Math.max(0, maxBytes - byteLength(note));
+  // Slice as bytes, then drop the last (possibly split) line.
+  let text = Buffer.from(diff, 'utf8').subarray(0, budget).toString('utf8');
+  const lastNewline = text.lastIndexOf('\n');
+  if (lastNewline > 0) {
+    text = text.slice(0, lastNewline);
+  }
+  return text + note;
+}
