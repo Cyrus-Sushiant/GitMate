@@ -164,7 +164,7 @@
         "gitmate.maxDiffBytes": {
           "type": "number",
           "default": 100000,
-          "description": "Maximum size of the diff (in bytes) sent to the model. Larger diffs are truncated with a warning."
+          "description": "Maximum size of the diff (in bytes) sent to the model. When changes are larger, the biggest file patches are replaced with per-file summaries so every changed file is still visible to the model. Also editable in the GitMate sidebar settings."
         },
         "gitmate.requestTimeoutMs": {
           "type": "number",

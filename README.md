@@ -64,7 +64,7 @@ The chat tab sends your conversation to the active provider and streams the repl
 | `gitmate.activeProvider` | `anthropic` | Which provider GitMate uses. |
 | `gitmate.providers` | empty | Per-provider model and base URL. Blank entries fall back to defaults. |
 | `gitmate.commitMessageInstructions` | Conventional Commits prompt | Extra instructions added to the commit prompt. |
-| `gitmate.maxDiffBytes` | `100000` | Diff size cap. Larger diffs are truncated with a warning. |
+| `gitmate.maxDiffBytes` | `100000` | Diff size cap, also editable in the sidebar settings. Larger diffs are condensed: the biggest file patches become per-file summaries so every changed file still reaches the model. |
 
 API keys are never stored in settings. They live in the VS Code secret store, set from the Settings tab.
 

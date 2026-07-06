@@ -1,14 +1,17 @@
 import * as vscode from 'vscode';
 import {
+  DEFAULT_MAX_DIFF_BYTES,
   PROVIDERS,
   PROVIDER_IDS,
   ProviderId,
   getActiveProvider,
+  getMaxDiffBytes,
   getProviderSettings,
   getRequestTimeoutMs,
   hasApiKey,
   resolveActiveConfig,
   setActiveProvider,
+  setMaxDiffBytes,
   setProviderSettings,
   setApiKey
 } from './config';
@@ -26,6 +29,8 @@ interface SaveMessage {
   activeProvider: ProviderId;
   providers: Record<ProviderId, ProviderFormValues>;
   keys: Partial<Record<ProviderId, string>>;
+  /** Diff size cap in bytes; undefined resets to the default. */
+  maxDiffBytes?: number;
 }
 
 interface TestMessage {
@@ -148,7 +153,13 @@ export class GitMateViewProvider implements vscode.WebviewViewProvider {
         hasKey: meta.needsKey ? await hasApiKey(this.context, id) : false
       };
     }
-    this.post({ type: 'state', activeProvider: getActiveProvider(), providers });
+    this.post({
+      type: 'state',
+      activeProvider: getActiveProvider(),
+      providers,
+      maxDiffBytes: getMaxDiffBytes(),
+      defaultMaxDiffBytes: DEFAULT_MAX_DIFF_BYTES
+    });
   }
 
   private async handleSave(message: SaveMessage): Promise<void> {
@@ -169,6 +180,7 @@ export class GitMateViewProvider implements vscode.WebviewViewProvider {
         }
       }
       await setActiveProvider(message.activeProvider);
+      await setMaxDiffBytes(message.maxDiffBytes);
       this.post({ type: 'saved' });
       await this.sendState();
       void vscode.window.showInformationMessage('GitMate: settings saved.');
@@ -589,11 +601,22 @@ function renderHtml(webview: vscode.Webview): string {
         </div>
 
         <div class="actions">
-          <button class="btn primary" id="save">Save</button>
           <button class="btn secondary" id="test">Test connection</button>
         </div>
-        <div class="status" id="status"></div>
       </div>
+
+      <div class="card" style="margin-top: 12px">
+        <h2>Commit messages</h2>
+        <p class="desc">Applies to every provider.</p>
+        <label for="maxDiffBytes">Max diff size (bytes)</label>
+        <input id="maxDiffBytes" type="number" min="1000" step="10000" />
+        <div class="field-note" id="maxDiffNote">Cap on the diff sent to the model. Bigger changes are condensed: the largest file patches are replaced with per-file summaries so every changed file is still mentioned. Leave blank for the default.</div>
+      </div>
+
+      <div class="actions">
+        <button class="btn primary" id="save">Save</button>
+      </div>
+      <div class="status" id="status"></div>
     </div>
 
     <div class="pane" id="pane-about">
@@ -740,6 +763,8 @@ function renderHtml(webview: vscode.Webview): string {
     const keyRow = el('keyRow');
     const keyEl = el('apiKey');
     const keyNote = el('keyNote');
+    const maxDiffEl = el('maxDiffBytes');
+    const maxDiffNote = el('maxDiffNote');
     const statusEl = el('status');
 
     function parsePositive(v) { const n = parseInt(v, 10); return Number.isFinite(n) && n > 0 ? n : undefined; }
@@ -781,7 +806,7 @@ function renderHtml(webview: vscode.Webview): string {
       providers[active] = { model: modelEl.value.trim(), baseUrl: baseUrlEl.value.trim(), requestTimeoutMs: parsePositive(timeoutEl.value), contextWindow: parsePositive(ctxEl.value) };
       const keys = {};
       if (current().needsKey && keyEl.value.length > 0) keys[active] = keyEl.value;
-      return { type: 'save', activeProvider: active, providers, keys };
+      return { type: 'save', activeProvider: active, providers, keys, maxDiffBytes: parsePositive(maxDiffEl.value) };
     }
     providerEl.addEventListener('change', applyProvider);
     modelEl.addEventListener('input', syncLocal);
@@ -812,6 +837,9 @@ function renderHtml(webview: vscode.Webview): string {
             const o1 = document.createElement('option'); o1.value = id; o1.textContent = state.providers[id].label; providerEl.appendChild(o1);
           }
           providerEl.value = state.activeProvider;
+          maxDiffEl.placeholder = String(state.defaultMaxDiffBytes);
+          maxDiffEl.value = state.maxDiffBytes !== state.defaultMaxDiffBytes ? String(state.maxDiffBytes) : '';
+          maxDiffNote.textContent = 'Cap on the diff sent to the model. Bigger changes are condensed: the largest file patches are replaced with per-file summaries so every changed file is still mentioned. Leave blank for the default (' + state.defaultMaxDiffBytes + ' bytes).';
           const active = state.providers[state.activeProvider];
           modelPickName.textContent = active.model || 'Set a model';
           modelPick.title = active.label + (active.model ? (' · ' + active.model) : '') + ' (click to change)';

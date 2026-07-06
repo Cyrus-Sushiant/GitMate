@@ -229,6 +229,19 @@ export function getRequestTimeoutMs(): number {
   return typeof value === 'number' && value > 0 ? Math.floor(value) : 0;
 }
 
+export const DEFAULT_MAX_DIFF_BYTES = 100000;
+
+/** Cap on the diff size (in bytes) sent to the model when generating commit messages. */
+export function getMaxDiffBytes(): number {
+  const value = gitmateConfig().get<number>('maxDiffBytes', DEFAULT_MAX_DIFF_BYTES);
+  return typeof value === 'number' && value > 0 ? Math.floor(value) : DEFAULT_MAX_DIFF_BYTES;
+}
+
+export async function setMaxDiffBytes(value: number | undefined): Promise<void> {
+  const next = value && value > 0 ? Math.floor(value) : undefined;
+  await gitmateConfig().update('maxDiffBytes', next, vscode.ConfigurationTarget.Global);
+}
+
 /** Coerces a stored value to a positive integer, or undefined when unset/invalid. */
 function positiveOrUndefined(value: unknown): number | undefined {
   return typeof value === 'number' && value > 0 ? Math.floor(value) : undefined;

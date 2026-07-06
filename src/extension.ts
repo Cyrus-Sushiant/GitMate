@@ -1,9 +1,9 @@
 import * as vscode from 'vscode';
-import { collectDiff, getGitAPI, pickRepository } from './git';
+import { collectDiff, condenseDiff, getGitAPI, pickRepository } from './git';
 import { generateCommitMessage } from './providers';
 import { openCreateBranchModal } from './branch';
 import { GitMateViewProvider } from './panel';
-import { PROVIDERS, resolveActiveConfig } from './config';
+import { PROVIDERS, getMaxDiffBytes, resolveActiveConfig } from './config';
 
 export function activate(context: vscode.ExtensionContext): void {
   const viewProvider = new GitMateViewProvider(context);
@@ -74,12 +74,15 @@ async function runGenerateCommitMessage(
 
   const config = vscode.workspace.getConfiguration('gitmate');
   const instructions = config.get<string>('commitMessageInstructions', '');
-  const maxDiffBytes = config.get<number>('maxDiffBytes', 100000);
+  const maxDiffBytes = getMaxDiffBytes();
 
-  if (Buffer.byteLength(diff, 'utf8') > maxDiffBytes) {
-    diff = diff.slice(0, maxDiffBytes);
-    void vscode.window.showWarningMessage(
-      `GitMate: the diff is larger than ${maxDiffBytes} bytes and was truncated before sending to the model.`
+  const condensed = condenseDiff(diff, maxDiffBytes);
+  diff = condensed.text;
+  if (condensed.summarizedFiles > 0) {
+    const files = condensed.summarizedFiles === 1 ? 'file was' : 'files were';
+    vscode.window.setStatusBarMessage(
+      `GitMate: large diff — ${condensed.summarizedFiles} ${files} summarized to fit the size limit.`,
+      8000
     );
   }
 
