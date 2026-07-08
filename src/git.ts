@@ -210,6 +210,19 @@ function byteLength(text: string): number {
   return Buffer.byteLength(text, 'utf8');
 }
 
+/** Extracts the changed file paths from a unified diff, in order. */
+export function listChangedFiles(diff: string): string[] {
+  const paths: string[] = [];
+  const pattern = /^diff --git a\/(.*) b\/(.*)$/;
+  for (const line of diff.split('\n')) {
+    const match = pattern.exec(line);
+    if (match) {
+      paths.push(match[2] || match[1]);
+    }
+  }
+  return paths;
+}
+
 /** Splits unified diff output into one group of lines per file. */
 function splitDiffByFile(diff: string): string[][] {
   const files: string[][] = [];

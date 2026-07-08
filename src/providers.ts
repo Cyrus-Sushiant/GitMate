@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { PROVIDERS, ResolvedProviderConfig } from './config';
+import { condenseDiff, listChangedFiles } from './git';
 
 export interface CommitMessageRequest {
   config: ResolvedProviderConfig;
@@ -36,6 +37,7 @@ const COMMIT_SYSTEM_PROMPT = [
   '- Write the summary in the imperative mood, lower case, with no trailing period, and keep the whole first line at or under 72 characters.',
   '- If the change is more than trivial, add a blank line and then a body that explains what changed and why. Use short bullet points that begin with "- " for the distinct changes.',
   '- Base the message only on the diff. Do not invent anything that is not in the changes.',
+  '- The diff may cover many files. Read through all of them before writing the summary and body — the message must reflect the full scope of the change, not just the first file or two.',
   '- Return only the commit message. No code fences, no surrounding quotes, and no lead in text.'
 ].join('\n');
 
@@ -58,9 +60,17 @@ const BRANCH_SYSTEM_PROMPT = [
 
 function buildCommitContent(req: CommitMessageRequest): string {
   const extra = req.instructions.trim();
+  const files = listChangedFiles(req.diff);
   const parts = ['Generate the commit message for the following diff.'];
   if (extra) {
     parts.push('', 'Additional guidance:', extra);
+  }
+  if (files.length > 1) {
+    parts.push(
+      '',
+      `Files changed (${files.length}): ${files.join(', ')}`,
+      'The message must account for all of these files, not just the first ones in the diff below.'
+    );
   }
   parts.push('', 'Diff:', '', req.diff);
   return parts.join('\n');
@@ -83,8 +93,8 @@ export async function suggestBranchName(req: BranchNameRequest): Promise<string>
     parts.push('The work is about:', description);
   }
   if (diff) {
-    const clipped = diff.length > 6000 ? diff.slice(0, 6000) : diff;
-    parts.push('', 'Here are the current changes:', '', clipped);
+    const condensed = condenseDiff(diff, 6000).text;
+    parts.push('', 'Here are the current changes:', '', condensed);
   }
   if (parts.length === 0) {
     parts.push('Suggest a short, generic branch name.');
